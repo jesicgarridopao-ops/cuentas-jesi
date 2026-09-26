@@ -1,6 +1,6 @@
 // Service worker de Cuentas de Jesi: guarda la app en el celu para que abra sin conexión.
 // Si cambiás index.html, subí el número de versión para que el celu tome la nueva.
-const VERSION = "cuentas-v2";
+const VERSION = "cuentas-v3";
 const LOCALES = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 const CHART = "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js";
 

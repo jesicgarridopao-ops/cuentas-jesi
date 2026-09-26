@@ -35,7 +35,7 @@ button,input,select{font:inherit;color:inherit}
 button{cursor:pointer}
 .num{font-variant-numeric:tabular-nums}
 .wrap{max-width:600px;margin:0 auto;padding:0 18px}
-main{padding-bottom:calc(118px + env(safe-area-inset-bottom,0px))}
+main.wrap{padding-bottom:calc(var(--pie,110px) + 40px)}
 [hidden]{display:none!important}
 :focus-visible{outline:3px solid var(--lila-d);outline-offset:2px;border-radius:8px}
 
@@ -213,7 +213,7 @@ dialog[open]{animation:sube .28s cubic-bezier(.2,.8,.2,1)}
 .falla{animation:tiembla .3s}
 @keyframes tiembla{25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
 
-.toast{position:fixed;left:50%;bottom:calc(100px + env(safe-area-inset-bottom,0px));transform:translate(-50%,20px);background:var(--ink);color:#fff;padding:11px 18px;border-radius:14px;font-size:15px;opacity:0;pointer-events:none;transition:.25s;z-index:30;max-width:90vw;text-align:center}
+.toast{position:fixed;left:50%;bottom:calc(var(--pie,100px) + 14px);transform:translate(-50%,20px);background:var(--ink);color:#fff;padding:11px 18px;border-radius:14px;font-size:15px;opacity:0;pointer-events:none;transition:.25s;z-index:30;max-width:90vw;text-align:center}
 .toast.on{opacity:1;transform:translate(-50%,0)}
 
 @media (min-width:700px){ .top h1{font-size:34px} }
@@ -1250,6 +1250,13 @@ function renderTodo() {
   if (UI.tab === "stats") renderStats();
   if (UI.tab === "ajustes" && !$("#tab-ajustes").contains(document.activeElement)) renderAjustes();
 }
+
+/* Espacio para la barra de abajo: se mide en el celu real (tamaño de letra, barra de gestos, etc.) */
+function ajustarPie() { document.documentElement.style.setProperty("--pie", Math.ceil($(".bnav").getBoundingClientRect().height) + "px"); }
+ajustarPie();
+if (window.ResizeObserver) new ResizeObserver(ajustarPie).observe($(".bnav"));
+window.addEventListener("resize", ajustarPie);
+window.addEventListener("load", ajustarPie);
 
 /* =========================================================
    Arranque
