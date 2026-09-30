@@ -147,6 +147,12 @@ input[type=range]{width:100%;accent-color:var(--lila-d);height:30px;margin:0}
 .inp:focus{outline:none;border-color:var(--lila-d);box-shadow:0 0 0 3px rgba(91,69,168,.15)}
 select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--ink2) 50%),linear-gradient(135deg,var(--ink2) 50%,transparent 50%);background-position:calc(100% - 18px) 55%,calc(100% - 13px) 55%;background-size:5px 5px;background-repeat:no-repeat;padding-right:34px}
 .estado{font-size:14.5px;margin:10px 0 0;color:var(--ink2)}
+.imp{margin-top:14px;border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.imp-fila{display:flex;justify-content:space-between;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:15px}
+.imp-fila:last-child{border-bottom:none}
+.imp-fila span:first-child{min-width:0}
+.imp-fila small{display:block;color:var(--ink2);font-size:13px;font-weight:400}
+.imp-fila b{white-space:nowrap;text-align:right}
 
 /* ---------- Botones y chips ---------- */
 .btn{border:none;border-radius:14px;padding:13px 18px;font-weight:700;font-size:16px;background:var(--lila-d);color:#fff}
@@ -344,6 +350,14 @@ dialog[open]{animation:sube .28s cubic-bezier(.2,.8,.2,1)}
       <h3>Tus pagos fijos</h3>
       <p class="sub">Los préstamos se descuentan solos mes a mes hasta la última cuota.</p>
       <div id="aFijos"></div>
+    </div>
+
+    <div class="card">
+      <h3>Importar compras de las tarjetas</h3>
+      <p class="sub">Pegá acá el código que te pasa Claude con las cuotas de los resúmenes. Si pegás el mismo código dos veces, no se duplica nada.</p>
+      <textarea class="inp" id="iTexto" rows="4" placeholder='{"cuentasJesi":1, …}' autocomplete="off" autocapitalize="off" spellcheck="false" style="font-size:14px;resize:vertical"></textarea>
+      <div class="fila-btns"><button class="btn sec" type="button" id="iRevisar">Revisar</button></div>
+      <div id="iPrev"></div>
     </div>
 
     <div class="card">
@@ -1029,6 +1043,59 @@ $("#aCsv").addEventListener("click", () => {
   const blob = new Blob(["\ufeff" + cab.join(";") + "\n" + filas.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "cuentas-jesi-" + hoyISO() + ".csv"; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+
+/* ---------- Importar compras desde un código ---------- */
+const slug = t => String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24);
+let impPend = null;
+function leerCodigo(txt) {
+  const i = txt.indexOf("{"), j = txt.lastIndexOf("}");
+  if (i < 0 || j < i) throw new Error("vacío");
+  const d = JSON.parse(txt.slice(i, j + 1));
+  if (!d || !Array.isArray(d.compras)) throw new Error("formato");
+  const ids = tarjetas().map(t => t.id), movs = [], avisos = [];
+  d.compras.forEach((c, x) => {
+    const t = c.t, n = Math.max(1, parseInt(c.n) || 1), k = Math.max(1, Math.min(n, parseInt(c.k) || 1)), cuota = +c.c || 0, m = String(c.m || "");
+    if (!ids.includes(t) || !cuota || !/^\d{4}-\d{2}$/.test(m)) { avisos.push("Renglón " + (x + 1) + " salteado"); return; }
+    const desde = mesAdd(m, -(k - 1));
+    movs.push({ id: "imp-" + t + "-" + desde + "-" + n + "-" + Math.round(cuota) + "-" + slug(c.d), tipo: "gasto", fecha: mesAdd(desde, -1) + "-01",
+      descripcion: String(c.d || "Compra").slice(0, 60), rubro: RUBROS.includes(c.r) ? c.r : "Otros", medio: t, monto: Math.round(cuota * n * 100) / 100, cuotas: n, desde, pagado: false });
+  });
+  (d.resumenes || []).forEach(r => {
+    const f = S.config.fijos.find(x => x.id === r.t && x.tipo === "tarjeta");
+    if (!f || !(+r.monto) || !/^\d{4}-\d{2}$/.test(String(r.m))) return;
+    movs.push({ id: "f-" + r.t + "-" + r.m, tipo: "fijo", item: r.t, mes: r.m, fecha: hoyISO(), descripcion: f.nombre, monto: +r.monto, pagado: !!r.pagado });
+  });
+  return { movs, avisos };
+}
+$("#iRevisar").addEventListener("click", () => {
+  const box = $("#iPrev"); impPend = null;
+  let r;
+  try { r = leerCodigo($("#iTexto").value); }
+  catch (e) { box.innerHTML = `<p class="estado">No pude leer el código. Copialo completo, desde la primera { hasta la última }.</p>`; return; }
+  if (!r.movs.length) { box.innerHTML = `<p class="estado">El código no trae compras para cargar.</p>`; return; }
+  impPend = r.movs;
+  const existentes = new Set(S.movs.map(m => m.id));
+  const nuevas = r.movs.filter(m => !existentes.has(m.id)).length;
+  const prox = mesAdd(mesHoy(), 1);
+  const filas = tarjetas().map(t => {
+    const cs = r.movs.filter(m => m.tipo === "gasto" && m.medio === t.id); if (!cs.length) return "";
+    const enProx = cs.reduce((s, g) => { const d = mesDif(g.desde, prox); return s + (d >= 0 && d < g.cuotas ? g.monto / g.cuotas : 0); }, 0);
+    const fin = cs.map(g => mesAdd(g.desde, g.cuotas - 1)).sort().pop();
+    return `<div class="imp-fila"><span>${esc(t.nombre)}<small>${cs.length} ${cs.length === 1 ? "compra" : "compras"}, cuotas hasta ${esc(mesNom(fin).toLowerCase())}</small></span><b class="num">${fmt(enProx)}<small>en ${esc(MESES[+prox.slice(5) - 1].toLowerCase())}</small></b></div>`;
+  }).join("");
+  const res = r.movs.filter(m => m.tipo === "fijo").map(m => `<div class="imp-fila"><span>Total del resumen ${esc(m.descripcion)}<small>${esc(mesNom(m.mes).toLowerCase())}</small></span><b class="num">${fmt(m.monto)}</b></div>`).join("");
+  box.innerHTML = `<div class="imp">${filas}${res}</div>
+    <p class="estado">${nuevas} ${nuevas === 1 ? "movimiento nuevo" : "movimientos nuevos"}${r.movs.length - nuevas ? ", " + (r.movs.length - nuevas) + " ya estaban y se actualizan" : ""}.${r.avisos.length ? " " + esc(r.avisos.join(", ")) + "." : ""}</p>
+    <div class="fila-btns"><button class="btn" type="button" id="iAgregar">Agregar a la app</button></div>`;
+});
+$("#iPrev").addEventListener("click", e => {
+  if (!e.target.closest("#iAgregar") || !impPend) return;
+  const ahora = new Date().toISOString();
+  impPend.forEach(mov => { const m = Object.assign({ creado: ahora }, mov); aplicar({ a: "put", mov: m }); S.cola.push({ a: "put", mov: m }); });
+  const n = impPend.length; impPend = null;
+  guardarLocal(); $("#iTexto").value = ""; $("#iPrev").innerHTML = "";
+  renderTodo(); sync(); toast(n + " movimientos cargados");
 });
 
 /* =========================================================
