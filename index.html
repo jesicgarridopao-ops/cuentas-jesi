@@ -551,6 +551,7 @@ function normCfg(c) {
     const m = Object.assign({}, b, f, { tipo: b.tipo });
     if (m.tipo === "prestamo") { m.cuota = +m.cuota || 0; m.cuotas = parseInt(m.cuotas) || 0; m.primera = /^\d{4}-\d{2}$/.test(m.primera) ? m.primera : mesHoy(); }
     if (m.tipo === "servicio") m.estimado = +m.estimado || 0;
+    if (m.tipo === "tarjeta") { m.cargoFijo = +m.cargoFijo || 0; m.cargoDesde = /^\d{4}-\d{2}$/.test(m.cargoDesde) ? m.cargoDesde : mesHoy(); }
     out.fijos.push(m);
   });
   return out;
@@ -597,6 +598,7 @@ function cuotaTarjeta(cardId, M) {
   }, 0);
 }
 
+const cargoTarjeta = (f, M) => (f.cargoFijo && M >= (f.cargoDesde || mesHoy())) ? f.cargoFijo : 0;
 function comprasTarjeta(cardId, M) {
   return S.movs.filter(g => g.tipo === "gasto" && g.medio === cardId).map(g => {
     const n = Math.max(1, g.cuotas || 1), desde = g.desde || mesAdd(g.fecha.slice(0, 7), 1);
@@ -617,9 +619,10 @@ function datosMes(M) {
       est = M < cur ? 0 : (f.estimado || 0);
       if (!est && !rec) nota = M < cur ? "Sin cargar" : "Sin monto aproximado";
     } else {
-      est = cuotaTarjeta(f.id, M);
+      const cf = cargoTarjeta(f, M);
+      est = cuotaTarjeta(f.id, M) + cf;
       const nc = comprasTarjeta(f.id, M).filter(x => x.k >= 1).length;
-      nota = nc ? nc + (nc === 1 ? " compra este mes" : " compras este mes") + ", tocá para ver" : "Sin compras cargadas";
+      nota = nc ? nc + (nc === 1 ? " compra este mes" : " compras este mes") + (cf ? " + cargos fijos" : "") + ", tocá para ver" : cf ? "Cargos fijos, tocá para ver" : "Sin compras cargadas";
     }
     return { f, rec, est, monto: rec ? rec.monto : est, real: !!rec, pagado: !!(rec && rec.pagado), activo: activo || !!rec, nota };
   });
@@ -1008,7 +1011,8 @@ function renderAjustes() {
         <label class="full">Monto aproximado por mes<input class="inp num" data-k="estimado" inputmode="decimal" value="${f.estimado ? fmtNum(f.estimado) : ""}" placeholder="$ 0"></label></div>
         <p class="hint">Se usa para proyectar. Cuando llega la factura, cargás el monto real en Pagos fijos.</p></div>`;
     return `<div class="aj-item" data-id="${f.id}"><p class="aj-nom">${dot}${esc(f.nombre)}</p>
-        <p class="hint" style="margin-top:0">Se arma con lo que compres con esta tarjeta. Si ya tenés compras en cuotas, cargalas como gasto con las cuotas que faltan y el primer resumen en este mes.</p></div>`;
+        <div class="aj-grid"><label class="full">Cargos fijos por mes (mantenimiento, seguros, comisiones)<input class="inp num" data-k="cargoFijo" inputmode="decimal" value="${f.cargoFijo ? fmtNum(f.cargoFijo) : ""}" placeholder="$ 0"></label></div>
+        <p class="hint">Se suman todos los meses a las cuotas de las compras${f.cargoFijo && f.cargoDesde ? ", desde " + esc(mesNom(f.cargoDesde).toLowerCase()) : ""}.</p></div>`;
   }).join("");
   $("#aUrl").value = S.conn.url || ""; $("#aClave").value = S.conn.clave || "";
   const e = $("#aEstado");
@@ -1020,7 +1024,7 @@ $("#aIngreso").addEventListener("change", e => { S.config.ingreso = parseMonto(e
 $("#aFijos").addEventListener("change", e => {
   const box = e.target.closest(".aj-item"); if (!box) return;
   const f = S.config.fijos.find(x => x.id === box.dataset.id), k = e.target.dataset.k; if (!f || !k) return;
-  if (k === "cuota" || k === "estimado") { f[k] = parseMonto(e.target.value); e.target.value = f[k] ? fmtNum(f[k]) : ""; }
+  if (k === "cuota" || k === "estimado" || k === "cargoFijo") { f[k] = parseMonto(e.target.value); e.target.value = f[k] ? fmtNum(f[k]) : ""; if (k === "cargoFijo" && !f.cargoDesde) f.cargoDesde = mesHoy(); }
   else if (k === "cuotas") { f[k] = Math.max(0, Math.min(120, parseInt(e.target.value) || 0)); e.target.value = f[k] || ""; }
   else f[k] = e.target.value;
   const h = box.querySelector("[data-hint]"); if (h) h.textContent = textoPrestamo(f);
@@ -1066,7 +1070,20 @@ function leerCodigo(txt) {
     if (!f || !(+r.monto) || !/^\d{4}-\d{2}$/.test(String(r.m))) return;
     movs.push({ id: "f-" + r.t + "-" + r.m, tipo: "fijo", item: r.t, mes: r.m, fecha: hoyISO(), descripcion: f.nombre, monto: +r.monto, pagado: !!r.pagado });
   });
-  return { movs, avisos };
+  const cargos = [];
+  (d.cargosFijos || []).forEach(c => {
+    const f = S.config.fijos.find(x => x.id === c.t && x.tipo === "tarjeta");
+    if (!f || !/^\d{4}-\d{2}$/.test(String(c.desde))) return;
+    cargos.push({ t: c.t, nombre: f.nombre, monto: +c.monto || 0, desde: String(c.desde), detalle: String(c.detalle || "") });
+  });
+  const borrar = [];
+  if (/^\d{4}-\d{2}$/.test(String(d.reemplazar || ""))) {
+    const cards = new Set(movs.filter(m => m.tipo === "gasto").map(m => m.medio)), nuevos = new Set(movs.map(m => m.id));
+    S.movs.forEach(m => {
+      if (m.tipo === "gasto" && cards.has(m.medio) && m.id.startsWith("imp-") && !nuevos.has(m.id) && mesAdd(m.desde, m.cuotas - 1) >= d.reemplazar) borrar.push(m.id);
+    });
+  }
+  return { movs, avisos, cargos, borrar };
 }
 $("#iRevisar").addEventListener("click", () => {
   const box = $("#iPrev"); impPend = null;
@@ -1074,7 +1091,7 @@ $("#iRevisar").addEventListener("click", () => {
   try { r = leerCodigo($("#iTexto").value); }
   catch (e) { box.innerHTML = `<p class="estado">No pude leer el código. Copialo completo, desde la primera { hasta la última }.</p>`; return; }
   if (!r.movs.length) { box.innerHTML = `<p class="estado">El código no trae compras para cargar.</p>`; return; }
-  impPend = r.movs;
+  impPend = r;
   const existentes = new Set(S.movs.map(m => m.id));
   const nuevas = r.movs.filter(m => !existentes.has(m.id)).length;
   const prox = mesAdd(mesHoy(), 1);
@@ -1084,16 +1101,22 @@ $("#iRevisar").addEventListener("click", () => {
     const fin = cs.map(g => mesAdd(g.desde, g.cuotas - 1)).sort().pop();
     return `<div class="imp-fila"><span>${esc(t.nombre)}<small>${cs.length} ${cs.length === 1 ? "compra" : "compras"}, cuotas hasta ${esc(mesNom(fin).toLowerCase())}</small></span><b class="num">${fmt(enProx)}<small>en ${esc(MESES[+prox.slice(5) - 1].toLowerCase())}</small></b></div>`;
   }).join("");
-  const res = r.movs.filter(m => m.tipo === "fijo").map(m => `<div class="imp-fila"><span>Total del resumen ${esc(m.descripcion)}<small>${esc(mesNom(m.mes).toLowerCase())}</small></span><b class="num">${fmt(m.monto)}</b></div>`).join("");
+  const res = r.movs.filter(m => m.tipo === "fijo").map(m => `<div class="imp-fila"><span>Total del resumen ${esc(m.descripcion)}<small>${esc(mesNom(m.mes).toLowerCase())}</small></span><b class="num">${fmt(m.monto)}</b></div>`).join("")
+    + r.cargos.map(c => `<div class="imp-fila"><span>Cargos fijos ${esc(c.nombre)}<small>${esc(c.detalle || "todos los meses")}, desde ${esc(mesNom(c.desde).toLowerCase())}</small></span><b class="num">${fmt(c.monto)}<small>por mes</small></b></div>`).join("");
   box.innerHTML = `<div class="imp">${filas}${res}</div>
-    <p class="estado">${nuevas} ${nuevas === 1 ? "movimiento nuevo" : "movimientos nuevos"}${r.movs.length - nuevas ? ", " + (r.movs.length - nuevas) + " ya estaban y se actualizan" : ""}.${r.avisos.length ? " " + esc(r.avisos.join(", ")) + "." : ""}</p>
+    <p class="estado">${nuevas} ${nuevas === 1 ? "movimiento nuevo" : "movimientos nuevos"}${r.movs.length - nuevas ? ", " + (r.movs.length - nuevas) + " ya estaban y se actualizan" : ""}.${r.borrar.length ? " Reemplaza " + r.borrar.length + (r.borrar.length === 1 ? " compra importada antes" : " compras importadas antes") + "." : ""}${r.avisos.length ? " " + esc(r.avisos.join(", ")) + "." : ""}</p>
     <div class="fila-btns"><button class="btn" type="button" id="iAgregar">Agregar a la app</button></div>`;
 });
 $("#iPrev").addEventListener("click", e => {
   if (!e.target.closest("#iAgregar") || !impPend) return;
   const ahora = new Date().toISOString();
-  impPend.forEach(mov => { const m = Object.assign({ creado: ahora }, mov); aplicar({ a: "put", mov: m }); S.cola.push({ a: "put", mov: m }); });
-  const n = impPend.length; impPend = null;
+  impPend.borrar.forEach(id => { aplicar({ a: "del", id }); S.cola.push({ a: "del", id }); });
+  impPend.movs.forEach(mov => { const m = Object.assign({ creado: ahora }, mov); aplicar({ a: "put", mov: m }); S.cola.push({ a: "put", mov: m }); });
+  if (impPend.cargos.length) {
+    impPend.cargos.forEach(c => { const f = S.config.fijos.find(x => x.id === c.t); if (f) { f.cargoFijo = c.monto; f.cargoDesde = c.desde; } });
+    S.cola = S.cola.filter(o => o.a !== "cfg"); S.cola.push({ a: "cfg", config: JSON.parse(JSON.stringify(S.config)) });
+  }
+  const n = impPend.movs.length; impPend = null;
   guardarLocal(); $("#iTexto").value = ""; $("#iPrev").innerHTML = "";
   renderTodo(); sync(); toast(n + " movimientos cargados");
 });
@@ -1244,15 +1267,19 @@ function abrirTarjeta(id) {
 function pintarTarjeta() {
   const id = tarjetaAbierta, M = UI.mes, f = S.config.fijos.find(x => x.id === id); if (!f) return;
   const compras = comprasTarjeta(id, M).sort((a, b) => a.fin.localeCompare(b.fin) || b.per - a.per);
-  const esteMes = compras.filter(x => x.k >= 1).reduce((s, x) => s + x.per, 0);
+  const cargo = cargoTarjeta(f, M);
+  const esteMes = compras.filter(x => x.k >= 1).reduce((s, x) => s + x.per, 0) + cargo;
   const despues = compras.reduce((s, x) => s + x.per * (x.n - Math.max(0, x.k)), 0);
   const rec = S.movs.find(x => x.tipo === "fijo" && x.item === id && x.mes === M);
   const mesTxt = MESES[+M.slice(5) - 1].toLowerCase();
   $("#dTitulo").textContent = f.nombre + ", " + mesTxt;
-  $("#dRes").innerHTML = `<div style="background:var(--durazno);color:var(--durazno-d)"><span>Cuotas de ${esc(mesTxt)}</span><b class="num">${fmt(esteMes)}</b><small>${rec ? "Resumen cargado: " + fmt(rec.monto) + (rec.pagado ? ", pagado" : "") : "Según lo cargado"}</small></div>
+  $("#dRes").innerHTML = `<div style="background:var(--durazno);color:var(--durazno-d)"><span>${cargo ? "Cuotas y cargos de" : "Cuotas de"} ${esc(mesTxt)}</span><b class="num">${fmt(esteMes)}</b><small>${rec ? "Resumen cargado: " + fmt(rec.monto) + (rec.pagado ? ", pagado" : "") : "Según lo cargado"}</small></div>
     <div style="background:var(--lila);color:var(--lila-d)"><span>Lo que viene después</span><b class="num">${fmt(despues)}</b><small>${compras.length ? "hasta " + mesNom(compras[compras.length - 1].fin).toLowerCase() : "nada pendiente"}</small></div>`;
   $("#dCant").textContent = compras.length ? compras.length + (compras.length === 1 ? " compra" : " compras") : "";
-  $("#dLista").innerHTML = compras.length ? compras.map(x => {
+  const filaCargo = cargo ? `<div class="fila"><span class="ini" style="background:var(--celeste);color:var(--celeste-d)">$</span>
+    <span class="fila-txt"><span class="fila-nom">Cargos fijos de la tarjeta</span><span class="fila-sub">Mantenimiento, seguros y comisiones. Se cambia en Ajustes</span></span>
+    <span class="fila-monto num">${fmt(cargo)}<small>todos los meses</small></span></div>` : "";
+  $("#dLista").innerHTML = (compras.length || cargo) ? filaCargo + compras.map(x => {
     const g = x.g, i = RUBROS.indexOf(g.rubro), pc = PASTELES[(i < 0 ? 9 : i) % PASTELES.length];
     const quedan = x.n - x.k;
     const sub = x.n === 1 ? "Un pago" : x.k >= 1 ? "Cuota " + x.k + " de " + x.n + ", " + (quedan ? (quedan === 1 ? "queda 1" : "quedan " + quedan) : "es la última") : "Empieza en " + mesNom(x.desde).toLowerCase();
