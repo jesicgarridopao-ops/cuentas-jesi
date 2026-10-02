@@ -62,6 +62,17 @@ main.wrap{padding-bottom:calc(var(--pie,110px) + 40px)}
 .aviso{background:var(--manteca);border-radius:18px;padding:16px 18px;margin-top:16px;color:#5E4808}
 .aviso p{margin:0 0 10px}
 .hero{background:var(--paper);border:1px solid var(--line);border-radius:28px;padding:22px 20px 18px;margin-top:16px}
+.vtos{background:var(--manteca);border-radius:20px;padding:12px 16px 6px;margin-top:16px}
+.vtos.alerta{background:var(--rosa)}
+.vtos-tit{margin:0 0 2px;font-family:var(--f-disp);font-weight:600;font-size:18px;color:var(--manteca-d)}
+.vtos.alerta .vtos-tit{color:var(--rosa-d)}
+.vtos-fila{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;width:100%;background:none;border:none;border-top:1px solid rgba(45,40,56,.1);padding:9px 0;text-align:left}
+.vtos-fila:first-of-type{border-top:none}
+.vtos-txt{min-width:0}
+.vtos-nom{display:block;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vtos-txt .vto{display:block;font-size:14.5px}
+.vto{font-weight:700;color:var(--ink);white-space:nowrap}
+.vto.pronto{color:var(--durazno-d)} .vto.vencido{color:var(--rosa-d)}
 .hero-lbl{margin:0;font-size:16px;color:var(--ink2);font-weight:500}
 .hero-num{margin:2px 0 0;font-family:var(--f-disp);font-weight:600;font-size:clamp(40px,12vw,54px);line-height:1.05;letter-spacing:-.02em}
 .hero-num.pos{color:var(--menta-d)} .hero-num.neg{color:var(--rosa-d)}
@@ -250,6 +261,7 @@ dialog[open]{animation:sube .28s cubic-bezier(.2,.8,.2,1)}
 
   <!-- ============ MES ============ -->
   <section id="tab-mes" class="tab">
+    <div class="vtos" id="vtos" hidden></div>
     <div class="aviso" id="aviso" hidden>
       <p>Para empezar, cargá tu ingreso mensual y las cuotas de tus préstamos. Con eso ya ves cuánto te queda cada mes.</p>
       <button class="btn" type="button" data-ir="ajustes">Ir a Ajustes</button>
@@ -361,6 +373,14 @@ dialog[open]{animation:sube .28s cubic-bezier(.2,.8,.2,1)}
     </div>
 
     <div class="card">
+      <h3>Vencimientos en tu calendario</h3>
+      <p class="sub">Crea en tu Google Calendar los vencimientos de este mes y los dos que vienen, con aviso 3 días antes y el día anterior a las 9. Cuando marcás un pago, el evento cambia a "Pagado".</p>
+      <label class="switch" style="margin-top:4px"><span>Mantener mi calendario al día</span><input type="checkbox" id="cAuto"></label>
+      <div class="fila-btns"><button class="btn sec" type="button" id="cAhora">Pasar ahora</button></div>
+      <p class="estado" id="cEstado"></p>
+    </div>
+
+    <div class="card">
       <h3>Conexión con la planilla</h3>
       <p class="sub">Con la planilla de Google conectada, lo que cargás queda guardado en Drive y lo ves desde cualquier celu.</p>
       <label class="campo">Dirección del script (termina en /exec)
@@ -467,6 +487,8 @@ dialog[open]{animation:sube .28s cubic-bezier(.2,.8,.2,1)}
     <div data-ver="fijo">
       <label class="lbl" for="fMes">Mes</label>
       <select class="inp" id="fMes"></select>
+      <label class="lbl" for="fVence">Vence el</label>
+      <input class="inp" id="fVence" type="date">
       <label class="switch"><span>Ya lo pagué</span><input type="checkbox" id="fPagado"></label>
     </div>
 
@@ -545,12 +567,15 @@ function cfgBase() {
 }
 function normCfg(c) {
   const base = cfgBase(); c = c || {};
-  const out = { ingreso: +c.ingreso || 0, gastoSuelto: +c.gastoSuelto || 0, fijos: [] };
+  const out = { ingreso: +c.ingreso || 0, gastoSuelto: +c.gastoSuelto || 0, calAuto: !!c.calAuto, fijos: [] };
   base.fijos.forEach(b => {
     const f = (c.fijos || []).find(x => x.id === b.id) || {};
     const m = Object.assign({}, b, f, { tipo: b.tipo });
     if (m.tipo === "prestamo") { m.cuota = +m.cuota || 0; m.cuotas = parseInt(m.cuotas) || 0; m.primera = /^\d{4}-\d{2}$/.test(m.primera) ? m.primera : mesHoy(); }
     if (m.tipo === "servicio") m.estimado = +m.estimado || 0;
+    m.vence = Math.max(0, Math.min(31, parseInt(m.vence) || 0));
+    const vs = {}; Object.entries(m.vencimientos || {}).forEach(([k, v]) => { if (/^\d{4}-\d{2}$/.test(k) && /^\d{4}-\d{2}-\d{2}$/.test(v)) vs[k] = v; });
+    m.vencimientos = vs;
     if (m.tipo === "tarjeta") { m.cargoFijo = +m.cargoFijo || 0; m.cargoDesde = /^\d{4}-\d{2}$/.test(m.cargoDesde) ? m.cargoDesde : mesHoy(); }
     out.fijos.push(m);
   });
@@ -567,9 +592,9 @@ function normMov(m) {
 function cargar() {
   try {
     const d = JSON.parse(localStorage.getItem(CLAVE_LS));
-    if (d) return { config: normCfg(d.config), movs: (d.movs || []).map(normMov), cola: d.cola || [], conn: d.conn || { url: "", clave: "" }, lastSync: d.lastSync || 0, err: "" };
+    if (d) return { config: normCfg(d.config), movs: (d.movs || []).map(normMov), cola: d.cola || [], conn: d.conn || { url: "", clave: "" }, lastSync: d.lastSync || 0, err: "", calHash: d.calHash || "", calErr: d.calErr || "", calUlt: d.calUlt || 0 };
   } catch (e) {}
-  return { config: cfgBase(), movs: [], cola: [], conn: { url: "", clave: "" }, lastSync: 0, err: "" };
+  return { config: normCfg(cfgBase()), movs: [], cola: [], conn: { url: "", clave: "" }, lastSync: 0, err: "" };
 }
 let S = cargar();
 function guardarLocal() { try { localStorage.setItem(CLAVE_LS, JSON.stringify(S)); } catch (e) {} }
@@ -598,6 +623,21 @@ function cuotaTarjeta(cardId, M) {
   }, 0);
 }
 
+const pad2 = n => String(n).padStart(2, "0");
+const diasMes = M => new Date(+M.slice(0, 4), +M.slice(5), 0).getDate();
+const DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+const venceBase = (f, M) => f.vence ? M + "-" + pad2(Math.min(f.vence, diasMes(M))) : "";
+const venceDe = (f, M) => (f.vencimientos && f.vencimientos[M]) || venceBase(f, M);
+function difDias(iso) { const [y, m, d] = iso.split("-").map(Number); const h = new Date(); h.setHours(0, 0, 0, 0); return Math.round((new Date(y, m - 1, d) - h) / 86400000); }
+function textoVence(iso) {
+  const n = difDias(iso), [y, m, d] = iso.split("-").map(Number), dia = DIAS[new Date(y, m - 1, d).getDay()];
+  if (n < -1) return { t: "venció el " + d + "/" + m, c: "vencido", n };
+  if (n === -1) return { t: "venció ayer", c: "vencido", n };
+  if (n === 0) return { t: "vence hoy", c: "vencido", n };
+  if (n === 1) return { t: "vence mañana", c: "pronto", n };
+  if (n <= 6) return { t: "vence el " + dia + " " + d, c: "pronto", n };
+  return { t: "vence el " + d + "/" + m, c: "", n };
+}
 const cargoTarjeta = (f, M) => (f.cargoFijo && M >= (f.cargoDesde || mesHoy())) ? f.cargoFijo : 0;
 function comprasTarjeta(cardId, M) {
   return S.movs.filter(g => g.tipo === "gasto" && g.medio === cardId).map(g => {
@@ -624,7 +664,7 @@ function datosMes(M) {
       const nc = comprasTarjeta(f.id, M).filter(x => x.k >= 1).length;
       nota = nc ? nc + (nc === 1 ? " compra este mes" : " compras este mes") + (cf ? " + cargos fijos" : "") + ", tocá para ver" : cf ? "Cargos fijos, tocá para ver" : "Sin compras cargadas";
     }
-    return { f, rec, est, monto: rec ? rec.monto : est, real: !!rec, pagado: !!(rec && rec.pagado), activo: activo || !!rec, nota };
+    return { f, rec, est, monto: rec ? rec.monto : est, real: !!rec, pagado: !!(rec && rec.pagado), activo: activo || !!rec, nota, vence: venceDe(f, M) };
   });
   const sum = t => fijos.filter(x => x.f.tipo === t).reduce((s, x) => s + x.monto, 0);
   const gastos = S.movs.filter(x => x.tipo === "gasto" && x.fecha.slice(0, 7) === M);
@@ -706,19 +746,36 @@ async function llamar(ops) {
   d.movs = (d.movs || []).map(normMov);
   return d;
 }
+function eventosCal() {
+  const cur = mesHoy(), meses = [cur, mesAdd(cur, 1), mesAdd(cur, 2)], ev = [];
+  meses.forEach(M => datosMes(M).fijos.forEach(x => {
+    if (!x.activo || !x.vence || (!x.monto && x.f.tipo !== "tarjeta")) return;
+    ev.push({ id: x.f.id + "-" + M, fecha: x.vence,
+      titulo: ((x.pagado ? "Pagado: " : "Vence ") + x.f.nombre + (x.monto ? " (" + fmt(x.monto) + ")" : "")).replace(/\u00a0/g, " "),
+      desc: ((x.monto ? "Monto " + (x.real ? "del resumen" : "estimado") + ": " + fmt(x.monto) + "\n" : "") + "Desde Cuentas de Jesi").replace(/\u00a0/g, " ") });
+  }));
+  return { eventos: ev, meses };
+}
+const hashTxt = t => { let h = 0; for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0; return String(h); };
+let otraVez = false;
 async function sync() {
-  if (!S.conn.url || sincronizando) return renderSync();
+  if (sincronizando) { otraVez = true; return; }
+  if (!S.conn.url) return renderSync();
   if (!navigator.onLine) { S.err = ""; return renderSync(); }
   sincronizando = true; renderSync();
   const ops = S.cola.slice();
+  let calOp = null, calHash = "";
+  if (S.config.calAuto) { const c = eventosCal(); calHash = hashTxt(JSON.stringify(c)); if (calHash !== S.calHash) calOp = Object.assign({ a: "cal" }, c); }
   try {
-    const d = await llamar(ops);
+    const d = await llamar(calOp ? ops.concat([calOp]) : ops);
     S.cola = S.cola.slice(ops.length);
+    if (calOp) { if (d.cal === "ok") { S.calHash = calHash; S.calErr = ""; S.calUlt = Date.now(); } else S.calErr = d.cal || "El script no respondió por el calendario. ¿Subiste la versión nueva del script?"; }
     S.movs = d.movs; if (d.config) S.config = normCfg(d.config);
     S.cola.forEach(aplicar);
     S.lastSync = Date.now(); S.err = ""; guardarLocal();
   } catch (e) { S.err = e.message || "No se pudo conectar."; }
   sincronizando = false; renderTodo();
+  if (otraVez) { otraVez = false; if (!S.err) setTimeout(sync, 50); }
 }
 async function conectar() {
   const est = $("#aEstado"); est.textContent = "Conectando…";
@@ -773,6 +830,19 @@ function renderMes() {
     ? "Usás el " + Math.round(d.total / d.ingreso * 100) + "% de tu ingreso de " + fmt(d.ingreso) + (d.futuro && d.suelto ? ", contando " + fmt(d.suelto) + " de gastos aparte." : ".")
     : "Cargá tu ingreso en Ajustes para ver cuánto te queda.";
 
+  // próximos vencimientos (solo en el mes actual)
+  const vb = $("#vtos");
+  if (d.cur) {
+    const pend = d.fijos.filter(x => x.activo && !x.pagado && x.vence).map(x => Object.assign({ tv: textoVence(x.vence) }, x)).sort((a, b) => a.vence.localeCompare(b.vence));
+    let lista = pend.filter(x => x.tv.n <= 7);
+    if (!lista.length && pend.length) lista = [pend[0]];
+    vb.hidden = !lista.length;
+    const alerta = lista.some(x => x.tv.c === "vencido");
+    vb.className = "vtos" + (alerta ? " alerta" : "");
+    vb.innerHTML = `<p class="vtos-tit">${alerta ? "Atención con los vencimientos" : "Próximos vencimientos"}</p>` + lista.slice(0, 4).map(x =>
+      `<button type="button" class="vtos-fila" data-vto="${x.f.id}"><span class="vtos-txt"><span class="vtos-nom">${esc(x.f.nombre)}</span><span class="vto ${x.tv.c}">${esc(x.tv.t[0].toUpperCase() + x.tv.t.slice(1))}</span></span><b class="num">${x.monto ? fmt(x.monto) : "—"}</b></button>`).join("");
+  } else vb.hidden = true;
+
   // tira
   const segs = segmentos(d, true), esc_ = Math.max(d.ingreso, d.total) || 1;
   const tira = $("#tira");
@@ -789,16 +859,18 @@ function renderMes() {
   $("#tFalta").textContent = fmt(d.faltaPagar);
 
   // pagos fijos
-  const orden = x => (x.activo ? 0 : 1);
-  const filas = d.fijos.slice().sort((a, b) => orden(a) - orden(b));
+  const orden = x => !x.activo ? 3 : x.pagado ? 2 : x.vence ? 0 : 1;
+  const filas = d.fijos.slice().sort((a, b) => orden(a) - orden(b) || (a.vence || "").localeCompare(b.vence || ""));
   $("#fijosTot").textContent = fmt(d.prestamos + d.tarjetas + d.servicios);
   $("#listaFijos").innerHTML = filas.map(x => {
     const c = COL[x.f.tipo];
     const estado = x.pagado ? "Pagado" : x.real ? "A pagar" : (x.monto ? "Estimado" : "");
     const sub = [x.nota, estado].filter(Boolean).join(", ");
+    const tv = x.vence && x.activo && !x.pagado ? textoVence(x.vence) : null;
+    const vto = tv ? `<b class="vto ${tv.c}">${esc(tv.t[0].toUpperCase() + tv.t.slice(1))}</b>` : "";
     return `<div class="fila${x.activo ? "" : " apagada"}" data-item="${x.f.id}">
       <button type="button" class="check${x.pagado ? " on" : ""}" data-check="${x.f.id}" aria-label="${x.pagado ? "Marcar " + esc(x.f.nombre) + " como no pagado" : "Marcar " + esc(x.f.nombre) + " como pagado"}" ${x.activo ? "" : "disabled"}>${CHECK}</button>
-      <div class="fila-txt" data-editfijo="${x.f.id}"><span class="fila-nom"><span class="pt" style="background:${c[0]};box-shadow:inset 0 0 0 1.5px ${c[1]}55"></span>${esc(x.f.nombre)}</span><span class="fila-sub">${esc(sub)}</span></div>
+      <div class="fila-txt" data-editfijo="${x.f.id}"><span class="fila-nom"><span class="pt" style="background:${c[0]};box-shadow:inset 0 0 0 1.5px ${c[1]}55"></span>${esc(x.f.nombre)}</span><span class="fila-sub">${vto}${vto && sub ? ". " : ""}${esc(sub)}</span></div>
       <div class="fila-monto num" data-editfijo="${x.f.id}">${x.monto ? fmt(x.monto) : "—"}</div>
     </div>`;
   }).join("");
@@ -1005,16 +1077,21 @@ function renderAjustes() {
     if (f.tipo === "prestamo") return `<div class="aj-item" data-id="${f.id}"><p class="aj-nom">${dot}${esc(f.nombre)}</p><div class="aj-grid">
         <label>Cuota por mes<input class="inp num" data-k="cuota" inputmode="decimal" value="${f.cuota ? fmtNum(f.cuota) : ""}" placeholder="$ 0"></label>
         <label>Cuotas que faltan<input class="inp num" data-k="cuotas" inputmode="numeric" value="${f.cuotas || ""}" placeholder="0"></label>
-        <label class="full">Próxima cuota a pagar<select class="inp" data-k="primera">${opcionesMes(f.primera, -3, 12)}</select></label></div>
+        <label>Próxima cuota a pagar<select class="inp" data-k="primera">${opcionesMes(f.primera, -3, 12)}</select></label>
+        <label>Día que vence<input class="inp num" data-k="vence" inputmode="numeric" value="${f.vence || ""}" placeholder="Ej: 10"></label></div>
         <p class="hint" data-hint>${esc(textoPrestamo(f))}</p></div>`;
     if (f.tipo === "servicio") return `<div class="aj-item" data-id="${f.id}"><p class="aj-nom">${dot}${esc(f.nombre)}</p><div class="aj-grid">
-        <label class="full">Monto aproximado por mes<input class="inp num" data-k="estimado" inputmode="decimal" value="${f.estimado ? fmtNum(f.estimado) : ""}" placeholder="$ 0"></label></div>
+        <label>Monto aproximado por mes<input class="inp num" data-k="estimado" inputmode="decimal" value="${f.estimado ? fmtNum(f.estimado) : ""}" placeholder="$ 0"></label>
+        <label>Día que vence<input class="inp num" data-k="vence" inputmode="numeric" value="${f.vence || ""}" placeholder="Ej: 15"></label></div>
         <p class="hint">Se usa para proyectar. Cuando llega la factura, cargás el monto real en Pagos fijos.</p></div>`;
     return `<div class="aj-item" data-id="${f.id}"><p class="aj-nom">${dot}${esc(f.nombre)}</p>
-        <div class="aj-grid"><label class="full">Cargos fijos por mes (mantenimiento, seguros, comisiones)<input class="inp num" data-k="cargoFijo" inputmode="decimal" value="${f.cargoFijo ? fmtNum(f.cargoFijo) : ""}" placeholder="$ 0"></label></div>
-        <p class="hint">Se suman todos los meses a las cuotas de las compras${f.cargoFijo && f.cargoDesde ? ", desde " + esc(mesNom(f.cargoDesde).toLowerCase()) : ""}.</p></div>`;
+        <div class="aj-grid"><label>Día que vence el resumen<input class="inp num" data-k="vence" inputmode="numeric" value="${f.vence || ""}" placeholder="Ej: 10"></label>
+        <label>Cargos fijos por mes<input class="inp num" data-k="cargoFijo" inputmode="decimal" value="${f.cargoFijo ? fmtNum(f.cargoFijo) : ""}" placeholder="$ 0"></label></div>
+        <p class="hint">El día se usa todos los meses; si un resumen vence otro día, cambialo en ese pago. Los cargos fijos (mantenimiento, seguros, comisiones) se suman a las cuotas${f.cargoFijo && f.cargoDesde ? " desde " + esc(mesNom(f.cargoDesde).toLowerCase()) : ""}.</p></div>`;
   }).join("");
   $("#aUrl").value = S.conn.url || ""; $("#aClave").value = S.conn.clave || "";
+  $("#cAuto").checked = !!S.config.calAuto;
+  $("#cEstado").textContent = S.calErr ? S.calErr : S.calUlt ? "Última vez: " + new Date(S.calUlt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" }) + "." : S.conn.url ? "" : "Necesita la planilla conectada.";
   const e = $("#aEstado");
   if (!S.conn.url) e.textContent = "Sin conectar: los datos quedan guardados solo en este celu.";
   else if (S.err) e.textContent = S.err;
@@ -1025,10 +1102,25 @@ $("#aFijos").addEventListener("change", e => {
   const box = e.target.closest(".aj-item"); if (!box) return;
   const f = S.config.fijos.find(x => x.id === box.dataset.id), k = e.target.dataset.k; if (!f || !k) return;
   if (k === "cuota" || k === "estimado" || k === "cargoFijo") { f[k] = parseMonto(e.target.value); e.target.value = f[k] ? fmtNum(f[k]) : ""; if (k === "cargoFijo" && !f.cargoDesde) f.cargoDesde = mesHoy(); }
+  else if (k === "vence") { f.vence = Math.max(0, Math.min(31, parseInt(e.target.value) || 0)); e.target.value = f.vence || ""; }
   else if (k === "cuotas") { f[k] = Math.max(0, Math.min(120, parseInt(e.target.value) || 0)); e.target.value = f[k] || ""; }
   else f[k] = e.target.value;
   const h = box.querySelector("[data-hint]"); if (h) h.textContent = textoPrestamo(f);
   guardarConfig(); renderNav(); renderMes();
+});
+$("#cAuto").addEventListener("change", e => {
+  if (e.target.checked && !S.conn.url) { e.target.checked = false; $("#cEstado").textContent = "Primero conectá la planilla, abajo."; return; }
+  S.config.calAuto = e.target.checked; S.calHash = ""; guardarConfig(true);
+  $("#cEstado").textContent = e.target.checked ? "Pasando vencimientos al calendario…" : "Listo. Los eventos que ya están quedan en tu calendario.";
+  if (e.target.checked) setTimeout(() => { renderAjustes(); }, 4000);
+});
+$("#cAhora").addEventListener("click", async () => {
+  if (!S.conn.url) { $("#cEstado").textContent = "Primero conectá la planilla, abajo."; return; }
+  const n = eventosCal().eventos.length;
+  if (!n) { $("#cEstado").textContent = "No hay vencimientos cargados. Poné el día que vence cada pago en Tus pagos fijos."; return; }
+  const antes = S.config.calAuto; S.config.calAuto = true; S.calHash = ""; $("#cEstado").textContent = "Pasando " + n + " vencimientos…";
+  await sync(); S.config.calAuto = antes; guardarLocal(); renderAjustes();
+  toast(S.calErr ? "No se pudo pasar al calendario" : n + " vencimientos en tu calendario");
 });
 $("#aConectar").addEventListener("click", () => {
   const url = $("#aUrl").value.trim(), clave = $("#aClave").value.trim();
@@ -1057,7 +1149,7 @@ function leerCodigo(txt) {
   if (i < 0 || j < i) throw new Error("vacío");
   const d = JSON.parse(txt.slice(i, j + 1));
   if (!d || !Array.isArray(d.compras)) throw new Error("formato");
-  const ids = tarjetas().map(t => t.id), movs = [], avisos = [];
+  const ids = tarjetas().map(t => t.id), movs = [], avisos = [], vtos = [];
   d.compras.forEach((c, x) => {
     const t = c.t, n = Math.max(1, parseInt(c.n) || 1), k = Math.max(1, Math.min(n, parseInt(c.k) || 1)), cuota = +c.c || 0, m = String(c.m || "");
     if (!ids.includes(t) || !cuota || !/^\d{4}-\d{2}$/.test(m)) { avisos.push("Renglón " + (x + 1) + " salteado"); return; }
@@ -1069,6 +1161,7 @@ function leerCodigo(txt) {
     const f = S.config.fijos.find(x => x.id === r.t && x.tipo === "tarjeta");
     if (!f || !(+r.monto) || !/^\d{4}-\d{2}$/.test(String(r.m))) return;
     movs.push({ id: "f-" + r.t + "-" + r.m, tipo: "fijo", item: r.t, mes: r.m, fecha: hoyISO(), descripcion: f.nombre, monto: +r.monto, pagado: !!r.pagado });
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(r.vence || ""))) vtos.push({ t: r.t, m: r.m, vence: String(r.vence), dia: parseInt(r.dia) || 0, nombre: f.nombre });
   });
   const cargos = [];
   (d.cargosFijos || []).forEach(c => {
@@ -1083,7 +1176,7 @@ function leerCodigo(txt) {
       if (m.tipo === "gasto" && cards.has(m.medio) && m.id.startsWith("imp-") && !nuevos.has(m.id) && mesAdd(m.desde, m.cuotas - 1) >= d.reemplazar) borrar.push(m.id);
     });
   }
-  return { movs, avisos, cargos, borrar };
+  return { movs, avisos, cargos, borrar, vtos };
 }
 $("#iRevisar").addEventListener("click", () => {
   const box = $("#iPrev"); impPend = null;
@@ -1102,6 +1195,7 @@ $("#iRevisar").addEventListener("click", () => {
     return `<div class="imp-fila"><span>${esc(t.nombre)}<small>${cs.length} ${cs.length === 1 ? "compra" : "compras"}, cuotas hasta ${esc(mesNom(fin).toLowerCase())}</small></span><b class="num">${fmt(enProx)}<small>en ${esc(MESES[+prox.slice(5) - 1].toLowerCase())}</small></b></div>`;
   }).join("");
   const res = r.movs.filter(m => m.tipo === "fijo").map(m => `<div class="imp-fila"><span>Total del resumen ${esc(m.descripcion)}<small>${esc(mesNom(m.mes).toLowerCase())}</small></span><b class="num">${fmt(m.monto)}</b></div>`).join("")
+    + r.vtos.map(v => `<div class="imp-fila"><span>Vencimiento ${esc(v.nombre)}<small>${esc(mesNom(v.m).toLowerCase())}</small></span><b class="num">${+v.vence.slice(8)}/${+v.vence.slice(5, 7)}</b></div>`).join("")
     + r.cargos.map(c => `<div class="imp-fila"><span>Cargos fijos ${esc(c.nombre)}<small>${esc(c.detalle || "todos los meses")}, desde ${esc(mesNom(c.desde).toLowerCase())}</small></span><b class="num">${fmt(c.monto)}<small>por mes</small></b></div>`).join("");
   box.innerHTML = `<div class="imp">${filas}${res}</div>
     <p class="estado">${nuevas} ${nuevas === 1 ? "movimiento nuevo" : "movimientos nuevos"}${r.movs.length - nuevas ? ", " + (r.movs.length - nuevas) + " ya estaban y se actualizan" : ""}.${r.borrar.length ? " Reemplaza " + r.borrar.length + (r.borrar.length === 1 ? " compra importada antes" : " compras importadas antes") + "." : ""}${r.avisos.length ? " " + esc(r.avisos.join(", ")) + "." : ""}</p>
@@ -1112,8 +1206,9 @@ $("#iPrev").addEventListener("click", e => {
   const ahora = new Date().toISOString();
   impPend.borrar.forEach(id => { aplicar({ a: "del", id }); S.cola.push({ a: "del", id }); });
   impPend.movs.forEach(mov => { const m = Object.assign({ creado: ahora }, mov); aplicar({ a: "put", mov: m }); S.cola.push({ a: "put", mov: m }); });
-  if (impPend.cargos.length) {
+  if (impPend.cargos.length || impPend.vtos.length) {
     impPend.cargos.forEach(c => { const f = S.config.fijos.find(x => x.id === c.t); if (f) { f.cargoFijo = c.monto; f.cargoDesde = c.desde; } });
+    impPend.vtos.forEach(v => { const f = S.config.fijos.find(x => x.id === v.t); if (!f) return; if (v.dia) f.vence = v.dia; else if (!f.vence) f.vence = +v.vence.slice(8); f.vencimientos = f.vencimientos || {}; if (v.vence !== venceBase(f, v.m)) f.vencimientos[v.m] = v.vence; else delete f.vencimientos[v.m]; });
     S.cola = S.cola.filter(o => o.a !== "cfg"); S.cola.push({ a: "cfg", config: JSON.parse(JSON.stringify(S.config)) });
   }
   const n = impPend.movs.length; impPend = null;
@@ -1148,11 +1243,13 @@ function abrirEditor(mov, preset) {
   $("#fTitulo").textContent = mov ? "Editar" : "Cargar";
   $("#fBorrar").hidden = !mov;
   ED.montoAuto = false;
-  if (ED.tipo === "fijo" && !mov) autoMontoFijo();
+  if (ED.tipo === "fijo" && !mov) autoMontoFijo(); else autoVence();
   pintarEditor();
   $("#sheet").showModal();
 }
+function autoVence() { const f = S.config.fijos.find(x => x.id === ED.item); $("#fVence").value = f ? venceDe(f, $("#fMes").value) : ""; }
 function autoMontoFijo() {
+  autoVence();
   const d = datosMes($("#fMes").value), x = d.fijos.find(y => y.f.id === ED.item);
   const inp = $("#fMonto");
   if (inp.value === "" || ED.montoAuto) { inp.value = x && x.monto ? fmtNum(x.monto) : ""; ED.montoAuto = true; }
@@ -1192,6 +1289,13 @@ function guardarEditor() {
   if (ED.tipo === "fijo") {
     const M = $("#fMes").value, f = S.config.fijos.find(x => x.id === ED.item);
     mov = { id: "f-" + ED.item + "-" + M, tipo: "fijo", item: ED.item, mes: M, fecha: hoyISO(), descripcion: f ? f.nombre : "", monto, pagado: $("#fPagado").checked };
+    const fv = $("#fVence").value;
+    if (f && fv !== venceDe(f, M)) {
+      f.vencimientos = f.vencimientos || {};
+      if (fv && fv !== venceBase(f, M)) f.vencimientos[M] = fv; else delete f.vencimientos[M];
+      if (fv && !f.vence) f.vence = +fv.slice(8);
+      guardarConfig(true);
+    }
     if (ED.orig && ED.orig.id !== mov.id) hacer({ a: "del", id: ED.orig.id });
   } else {
     const tj = ED.tipo === "gasto" && esTarjeta(ED.medio), c = datosCuotas();
@@ -1258,6 +1362,11 @@ $("#listaFijos").addEventListener("click", e => {
     else if (x && x.rec) abrirEditor(x.rec); else abrirEditor(null, { tipo: "fijo", item: id, mes: UI.mes, pagado: false });
   }
 });
+$("#vtos").addEventListener("click", e => {
+  const b = e.target.closest("[data-vto]"); if (!b) return;
+  const t = document.querySelector('#listaFijos [data-editfijo="' + b.dataset.vto + '"]'); if (t) t.click();
+});
+
 /* ---------- Detalle de tarjeta: cada compra y sus cuotas ---------- */
 let tarjetaAbierta = null;
 function abrirTarjeta(id) {
@@ -1273,7 +1382,7 @@ function pintarTarjeta() {
   const rec = S.movs.find(x => x.tipo === "fijo" && x.item === id && x.mes === M);
   const mesTxt = MESES[+M.slice(5) - 1].toLowerCase();
   $("#dTitulo").textContent = f.nombre + ", " + mesTxt;
-  $("#dRes").innerHTML = `<div style="background:var(--durazno);color:var(--durazno-d)"><span>${cargo ? "Cuotas y cargos de" : "Cuotas de"} ${esc(mesTxt)}</span><b class="num">${fmt(esteMes)}</b><small>${rec ? "Resumen cargado: " + fmt(rec.monto) + (rec.pagado ? ", pagado" : "") : "Según lo cargado"}</small></div>
+  $("#dRes").innerHTML = `<div style="background:var(--durazno);color:var(--durazno-d)"><span>${cargo ? "Cuotas y cargos de" : "Cuotas de"} ${esc(mesTxt)}</span><b class="num">${fmt(esteMes)}</b><small>${rec ? "Resumen cargado: " + fmt(rec.monto) + (rec.pagado ? ", pagado" : "") : "Según lo cargado"}${venceDe(f, M) ? ". Vence el " + (+venceDe(f, M).slice(8)) + "/" + (+venceDe(f, M).slice(5, 7)) : ""}</small></div>
     <div style="background:var(--lila);color:var(--lila-d)"><span>Lo que viene después</span><b class="num">${fmt(despues)}</b><small>${compras.length ? "hasta " + mesNom(compras[compras.length - 1].fin).toLowerCase() : "nada pendiente"}</small></div>`;
   $("#dCant").textContent = compras.length ? compras.length + (compras.length === 1 ? " compra" : " compras") : "";
   const filaCargo = cargo ? `<div class="fila"><span class="ini" style="background:var(--celeste);color:var(--celeste-d)">$</span>
